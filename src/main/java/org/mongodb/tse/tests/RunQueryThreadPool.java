@@ -5,12 +5,14 @@
  */
 package org.mongodb.tse.tests;
 
+import com.mongodb.BasicDBObject;
 import com.mongodb.MongoClient;
 import com.mongodb.MongoClientURI;
 import com.mongodb.ReadPreference;
+import com.mongodb.client.FindIterable;
 import com.mongodb.client.MongoCollection;
 import com.mongodb.client.MongoDatabase;
-import static com.mongodb.client.model.Filters.eq;
+import static com.mongodb.client.model.Filters.*;
 import java.io.BufferedReader;
 import java.io.File;
 import java.io.FileReader;
@@ -28,7 +30,6 @@ import org.apache.commons.cli.Options;
 import org.apache.commons.cli.ParseException;
 import org.bson.Document;
 import org.bson.RawBsonDocument;
-import static org.mongodb.tse.tests.Timings.parseIdFile;
 
 /**
  *
@@ -130,9 +131,15 @@ public class RunQueryThreadPool {
                 .hasArg()
                 .type(String.class)
                 .build();
-        Option odoc = Option.builder("doc")
-                .argName("doc")
-                .desc("get a Document instead of RawBsonDocument, no size output with this option")
+        Option oincludeslow = Option.builder("includeslow")
+                .argName("includeslow")
+                .desc("run slow query that will pause 1 second for every document in collection")
+                .build();
+        Option oincreasethreads = Option.builder("increasethreads")
+                .argName("increasethreads")
+                .desc("increase thread count every second until this number")
+                .hasArg()
+                .type(Integer.class)
                 .build();
         
         Options options = new Options();
@@ -145,7 +152,8 @@ public class RunQueryThreadPool {
         options.addOption(readPreference);
         options.addOption(oids);
         options.addOption(oidFile);
-        options.addOption(odoc);
+        options.addOption(oincludeslow);
+        options.addOption(oincreasethreads);
         
         CommandLineParser parser = new DefaultParser();
         CommandLine cline = null;
@@ -183,8 +191,8 @@ public class RunQueryThreadPool {
         if ( cline.hasOption("threads") ) threads = Integer.parseInt(cline.getOptionValue("threads"));
         
         int max = ids.length;
-        
-        ExecutorService pool = Executors.newFixedThreadPool(threads);
+        boolean includeslow = cline.hasOption("includeslow");
+        ExecutorService pool = Executors.newCachedThreadPool();
         for ( int i = 0; i < threads; i++ ) {
             pool.execute( new Runnable() {
                 public void run() {
@@ -197,13 +205,44 @@ public class RunQueryThreadPool {
                         Date date = new Date();
                         long end = 0L;
                         long start = System.nanoTime();
-                        doc = collection.find( eq( "_id", id ) ).first();
-                        end = System.nanoTime();
-                        if ( doc == null ) System.out.println( "Could not find " + id );
+                        
+                        try {
+                            if ( 
+                                    includeslow 
+                                    //&& ( count % 2 ) == 0 
+                                    ) {
+                                FindIterable<Document> fit = collection.find( where(
+                                        "function() { " +
+                                                "var d = new Date((new Date()).getTime() + 1*1000); " +
+                                                "while ( d > (new Date())) { }; " +
+                                                "return true;" +
+                                        "}" ) ).limit(100);
+                                int dcount = 0;
+                                for ( Document d : fit ) {
+                                    dcount++;
+                                }
+                                System.out.println( String.format("%s - slow query, count:%s, start: %s, elasped: %s ns", Thread.currentThread().getName(), dcount, date, (end-start) ) );
+                            }
+                            else {
+                                doc = collection.find( and( eq( "_id", id ), 
+                                        where(
+                                        "function() { " +
+                                                "var d = new Date((new Date()).getTime() + 1*1000); " +
+                                                "while ( d > (new Date())) { }; " +
+                                                "return true;" +
+                                        "}" ) ) ).first();
+                                end = System.nanoTime();
+                                if ( doc == null ) System.out.println( "Could not find " + id );
+                                System.out.println( String.format("%s - id: %s, start: %s, elasped: %s ns", Thread.currentThread().getName(), id, date, (end-start) ) );
+                            }
+                        }
+                        catch ( Exception e ) {
+                            System.out.println( "Got an exception: " + e.getMessage() );
+                            e.printStackTrace();
+                            try { Thread.sleep(1000); } catch ( InterruptedException e2 ) {}
+                        }
 
-                        int size = 0;
-                        System.out.println( String.format("%s: ,id: %s, start: %s, elasped: %s ns", Thread.currentThread().getName(), id, date, (end-start) ) );
-                        try { Thread.sleep(sleep); } catch ( InterruptedException e ) {}
+                        //try { Thread.sleep(sleep); } catch ( InterruptedException e ) {}
                         count++;
                         
                     }
@@ -211,7 +250,67 @@ public class RunQueryThreadPool {
                 }
             });
         }
-        
+        if ( cline.hasOption("increasethreads") ) {
+            int increaseThreads = Integer.parseInt(cline.getOptionValue("increasethreads"));
+            for ( int i = threads; i < increaseThreads; i++ ) {
+                try { Thread.sleep(1000); } catch ( InterruptedException e ) {}
+                pool.execute( new Runnable() {
+                    public void run() {
+                        int count = 0;
+                        for ( ; ; ) {
+                            String id = ids[ (count%max) ];
+                            Document doc = null;
+                            RawBsonDocument raw = null;
+
+                            Date date = new Date();
+                            long end = 0L;
+                            long start = System.nanoTime();
+
+                            try {
+                                if ( 
+                                        includeslow 
+                                        //&& ( count % 2 == 0 ) 
+                                        ) {
+                                    FindIterable<Document> fit = collection.find( where(
+                                            "function() { " +
+                                                    "var d = new Date((new Date()).getTime() + 1*1000); " +
+                                                    "while ( d > (new Date())) { }; " +
+                                                    "return true;" +
+                                            "}" ) ).limit(100);
+                                    int dcount = 0;
+                                    for ( Document d : fit ) {
+                                        dcount++;
+                                    }
+                                    System.out.println( String.format("%s - slow query, count:%s, start: %s, elasped: %s ns", Thread.currentThread().getName(), dcount, date, (end-start) ) );
+                                }
+                                else {
+                                    doc = collection.find( and( eq( "_id", id ), 
+                                            where(
+                                            "function() { " +
+                                                    "var d = new Date((new Date()).getTime() + 1*1000); " +
+                                                    "while ( d > (new Date())) { }; " +
+                                                    "return true;" +
+                                            "}" ) ) ).first();
+                                    end = System.nanoTime();
+                                    if ( doc == null ) System.out.println( "Could not find " + id );
+                                    System.out.println( String.format("%s - id: %s, start: %s, elasped: %s ns", Thread.currentThread().getName(), id, date, (end-start) ) );
+                                }
+                            }
+                            catch ( Exception e ) {
+                                System.out.println( "Got an exception: " + e.getMessage() );
+                                e.printStackTrace();
+                                try { Thread.sleep(1000); } catch ( InterruptedException e2 ) {}
+                            }
+
+                            //try { Thread.sleep(sleep); } catch ( InterruptedException e ) {}
+                            count++;
+
+                        }
+
+                    }
+                });
+            }
+        }
     }
     
 }

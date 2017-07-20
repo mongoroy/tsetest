@@ -136,6 +136,28 @@ public class Throughput {
             .hasArg()
             .type(Integer.class)
             .build();
+        Option numberRunsO = Option.builder("numberRuns")
+            .argName("numberRuns")
+            .desc("number of times to run, default 1")
+            .hasArg()
+            .type(Integer.class)
+            .build();
+        Option threadIncreasePerRunO = Option.builder("threadIncreasePerRun")
+            .argName("threadIncreasePerRun")
+            .desc("for each run increase number of threads by this amount, default 5")
+            .hasArg()
+            .type(Integer.class)
+            .build();
+        Option insertStatisticCollectionO = Option.builder("insertStatisticCollection")
+            .argName("insertStatisticCollection")
+            .hasArg()
+            .type(String.class)
+            .desc("insert statistics into this collection")
+            .build();
+        Option printOperationsPerSecondFlagO = Option.builder("printOperationsPerSecondFlag")
+            .argName("printOperationsPerSecondFlag")
+            .desc("print number of operations per second, default off")
+            .build();
 
         Options options = new Options();
         options.addOption(help);
@@ -148,6 +170,10 @@ public class Throughput {
         options.addOption(oids);
         options.addOption(oidFile);
         options.addOption(runTimeO);
+        options.addOption(numberRunsO);
+        options.addOption(threadIncreasePerRunO);
+        options.addOption(insertStatisticCollectionO);
+        options.addOption(printOperationsPerSecondFlagO);
 
         CommandLineParser parser = new DefaultParser();
         CommandLine cline = null;
@@ -185,35 +211,87 @@ public class Throughput {
         if (cline.hasOption("threads")) threadsN = Integer.parseInt(cline.getOptionValue("threads"));
         int runTime = 5;
         if (cline.hasOption("runTime")) runTime = Integer.parseInt(cline.getOptionValue("runTime", "5"));
-
-        LocalDateTime endDate = LocalDateTime.now(ZoneOffset.UTC);
-        endDate = endDate.plus(runTime, ChronoUnit.MINUTES);
-
-        ThroughputThread[] threads = new ThroughputThread[threadsN];
-        for (int i = 0; i < threadsN; i++) {
-            threads[i] = new ThroughputThread(i, collection, ids, sleep);
-            threads[i].start();
+        int numberRuns = 1;
+        if (cline.hasOption("numberRuns")) numberRuns = Integer.parseInt(cline.getOptionValue("numberRuns", "1"));
+        int threadIncreasePerRun = 0;
+        if (cline.hasOption("threadIncreasePerRun")) threadIncreasePerRun = Integer.parseInt(cline.getOptionValue("threadIncreasePerRun", "0"));
+        MongoCollection<Document> insertStatisticCollection = null;
+        if (cline.hasOption("insertStatisticCollection")) {
+            insertStatisticCollection = getCollection(cline, database, cline.getOptionValue("insertStatisticCollection"));
         }
+        boolean printOperationsPerSecond = false;
+        if (cline.hasOption("printOperationsPerSecondFlag")) printOperationsPerSecond = true;
+
+
+        LocalDateTime startRunDate = LocalDateTime.now(ZoneOffset.UTC);
 
         File stopFile = new File("/tmp/top");
-        int count = 0;
-        List<Integer> opsPerSecond = new ArrayList<>();
 
-        try { Thread.sleep(1000); } catch ( Exception e ) {}
-        while ( LocalDateTime.now(ZoneOffset.UTC).compareTo(endDate) < 0 ) {
-            int current = 0;
-            for (ThroughputThread t : threads) {
-                current += t.getCounter();
+        for ( int r = 0; r < numberRuns; r++ ) {
+
+            if (stopFile.exists()) {
+                Throughput.STOP = true;
+                break;
             }
-            opsPerSecond.add(current - count);
-            System.out.println( current - count );
-            count = current;
-            Throughput.STOP = stopFile.exists();
-            try { Thread.sleep(1000); } catch ( Exception e ) {}
-        }
 
-        IntSummaryStatistics stats = opsPerSecond.stream().mapToInt((x) -> x).summaryStatistics();
-        System.out.println( stats );
+            LocalDateTime endDate = LocalDateTime.now(ZoneOffset.UTC);
+            endDate = endDate.plus(runTime, ChronoUnit.MINUTES);
+
+            int count = 0;
+
+            Throughput.STOP = false;
+
+            ThroughputThread[] threads = new ThroughputThread[threadsN];
+            for (int i = 0; i < threadsN; i++) {
+                threads[i] = new ThroughputThread(i, collection, ids, sleep);
+                threads[i].start();
+            }
+            try { Thread.sleep(1000); } catch ( Exception e ) {}
+
+            List<Integer> opsPerSecond = new ArrayList<>();
+            while ( LocalDateTime.now(ZoneOffset.UTC).compareTo(endDate) < 0 ) {
+                int current = 0;
+                for (ThroughputThread t : threads) {
+                    current += t.getCounter();
+                }
+                opsPerSecond.add(current - count);
+                if ( printOperationsPerSecond ) {
+                    System.out.println( String.format( "Number of ops this second: %d", (current - count) ) );
+                }
+                count = current;
+
+                if (stopFile.exists()) {
+                    Throughput.STOP = true;
+                    break;
+                }
+
+                try { Thread.sleep(1000); } catch ( Exception e ) {}
+            }
+            Throughput.STOP = true;
+
+            // wait for all threads to stop
+            for ( ThroughputThread t : threads ) {
+                while ( t.isAlive() ) {
+                    try { Thread.sleep(1000); } catch ( Exception e ) {}
+                }
+            }
+
+            IntSummaryStatistics stats = opsPerSecond.stream().mapToInt((x) -> x).summaryStatistics();
+            System.out.println( "Run " + r + ", Threads: " + threadsN + ", " + stats );
+
+            if (insertStatisticCollection != null) {
+                Document doc = new Document("start", startRunDate)
+                    .append("run", r)
+                    .append("threads", threadsN)
+                    .append("sum", stats.getSum())
+                    .append("min", stats.getMin())
+                    .append("max", stats.getMax())
+                    .append("avg", stats.getAverage());
+                insertStatisticCollection.insertOne(doc);
+            }
+
+            threadsN += threadIncreasePerRun;
+        }
 
         Throughput.STOP = true;
 

@@ -24,9 +24,7 @@ import java.io.File;
 import java.io.FileReader;
 import java.time.*;
 import java.time.temporal.ChronoUnit;
-import java.util.ArrayList;
-import java.util.IntSummaryStatistics;
-import java.util.List;
+import java.util.*;
 
 import static com.mongodb.client.model.Filters.and;
 import static com.mongodb.client.model.Filters.eq;
@@ -223,7 +221,7 @@ public class Throughput {
         if (cline.hasOption("printOperationsPerSecondFlag")) printOperationsPerSecond = true;
 
 
-        LocalDateTime startRunDate = LocalDateTime.now(ZoneOffset.UTC);
+        Date startRunDate = Date.from(LocalDateTime.now(ZoneOffset.UTC).toInstant(ZoneOffset.UTC));
 
         File stopFile = new File("/tmp/top");
 

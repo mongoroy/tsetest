@@ -6,6 +6,7 @@
 package org.mongodb.tse.tests;
 
 import com.mongodb.MongoClient;
+import com.mongodb.MongoClientOptions;
 import com.mongodb.MongoClientURI;
 import com.mongodb.ReadPreference;
 import com.mongodb.client.MongoCollection;
@@ -37,6 +38,8 @@ import static com.mongodb.client.model.Filters.where;
  * @author royrim
  */
 public class RunQueryThreadPool {
+
+    private static volatile boolean STOP = false;
 
 
     private static void printHelp(Options options) {
@@ -174,8 +177,11 @@ public class RunQueryThreadPool {
         String collectionParameter = cline.getOptionValue("collection", "product");
         System.out.println("Using database: " + databaseParameter + " and collection: " + collectionParameter);
 
-        MongoClientURI uri = new MongoClientURI(uriParameter);
-        MongoClient mongoClient = new MongoClient(uri);
+        MongoClientOptions.Builder builder = MongoClientOptions.builder();
+        builder.socketKeepAlive(true);
+
+
+        MongoClient mongoClient = new MongoClient(new MongoClientURI(uriParameter, builder));
 
         MongoDatabase database = mongoClient.getDatabase(databaseParameter);
         final MongoCollection<Document> collection = getCollection(cline, database, collectionParameter);
@@ -204,6 +210,13 @@ public class RunQueryThreadPool {
                 pool.execute(getRunnable(ids, collection, max, includeslow));
             }
         }
+
+        File stopFile = new File("/tmp/top");
+        while (true) {
+            RunQueryThreadPool.STOP = stopFile.exists();
+            try { Thread.sleep(1000); } catch ( Exception e ) {}
+        }
+
     }
 
     private static Runnable getRunnable(final String[] ids, final MongoCollection<Document> collection, final int max, final boolean includeSlow) {
@@ -215,6 +228,11 @@ public class RunQueryThreadPool {
                 long end;
                 long start = System.nanoTime();
 
+                if ( RunQueryThreadPool.STOP ) {
+                    System.out.println( "Told to stop" );
+                    try { Thread.sleep(1000); } catch ( Exception e ) {}
+                    continue;
+                }
                 try {
                     if (includeSlow
                         //&& ( count % 2 ) == 0

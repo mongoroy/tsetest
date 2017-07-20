@@ -40,7 +40,7 @@ public class Throughput {
 
     private static void printHelp(Options options) {
         HelpFormatter formatter = new HelpFormatter();
-        formatter.printHelp("org.mongodb.tse.tests.RunQueryThreadPool", options);
+        formatter.printHelp("org.mongodb.tse.tests.Throughput", options);
         System.exit(0);
     }
 

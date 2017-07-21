@@ -128,6 +128,12 @@ public class Throughput {
             .hasArg()
             .type(String.class)
             .build();
+        Option runNameO = Option.builder("runName")
+            .argName("runName")
+            .desc("name of the run, default will be datetime")
+            .hasArg()
+            .type(String.class)
+            .build();
         Option runTimeO = Option.builder("runTime")
             .argName("runTime")
             .desc("time to run, default 5 min")
@@ -167,6 +173,7 @@ public class Throughput {
         options.addOption(readPreference);
         options.addOption(oids);
         options.addOption(oidFile);
+        options.addOption(runNameO);
         options.addOption(runTimeO);
         options.addOption(numberRunsO);
         options.addOption(threadIncreasePerRunO);
@@ -222,6 +229,8 @@ public class Throughput {
 
 
         Date startRunDate = Date.from(LocalDateTime.now(ZoneOffset.UTC).toInstant(ZoneOffset.UTC));
+        String runName = startRunDate.toString();
+        if (cline.hasOption("runName")) runName = cline.getOptionValue("runName");
 
         File stopFile = new File("/tmp/top");
 
@@ -278,7 +287,8 @@ public class Throughput {
             System.out.println( "Run " + r + ", Threads: " + threadsN + ", " + stats );
 
             if (insertStatisticCollection != null) {
-                Document doc = new Document("start", startRunDate)
+                Document doc = new Document("name", runName)
+                    .append("start", startRunDate)
                     .append("run", r)
                     .append("threads", threadsN)
                     .append("sum", stats.getSum())
